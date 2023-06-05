@@ -1,7 +1,34 @@
-# A toolkit to seemlessly create parquet datasets on AWS S3, sync them with AWS Glue and query them with AWS Athena
+# aws-parquet
+
+<br>
+
+[![PyPI version shields.io](https://img.shields.io/pypi/v/aws-parquet.svg)](https://pypi.org/project/aws-parquet/)
+[![PyPI license](https://img.shields.io/pypi/l/aws-parquet.svg)](https://pypi.python.org/pypi/)
+[![PyPI pyversions](https://img.shields.io/pypi/pyversions/aws-parquet.svg)](https://pypi.python.org/pypi/aws-parquet/)
+[![Downloads](https://pepy.tech/badge/aws-parquet/month)](https://pepy.tech/project/aws-parquet)
+[![Downloads](https://pepy.tech/badge/aws-parquet)](https://pepy.tech/project/aws-parquet)
+
+`aws-parquet` is a toolkit than enables working with parquet datasets on AWS. It handles AWS S3 reads/writes, AWS Glue catalog updates and AWS Athena queries by providing a simple and intuitive interface.
 
 ## Motivation
-An object-oriented interface for defining parquet datasets for AWS built on top of awswrangler and pandera
+
+The goal is to provide a simple and intuitive interface to create and manage parquet datasets on AWS.
+
+`aws-parquet` makes use of the following tools: 
+- [awswrangler](https://aws-sdk-pandas.readthedocs.io/en/stable/) as an AWS SDK for pandas
+- [pandera](https://pandera.readthedocs.io/en/stable/) for pandas-based data validation
+- [typeguard](https://typeguard.readthedocs.io/en/stable/userguide.html) and [pydantic](https://docs.pydantic.dev/latest/) for runtime type checking
+
+## Features
+`aws-parquet` provides a `ParquetDataset` class that enables the following operations:
+
+- create a parquet dataset that will get registered in AWS Glue
+- append new data to the dataset and update the AWS Glue catalog
+- read a partition of the dataset and perform proper schema validation and type casting
+- overwrite data in the dataset after performing proper schema validation and type casting
+- delete a partition of the dataset and update the AWS Glue catalog
+- query the dataset using AWS Athena
+
 
 ## How to setup
 
@@ -13,59 +40,42 @@ pip install aws_parquet
 
 ## How to use
 
-Creating a parquet dataset that will get registered in AWS Glue
+Create a parquet dataset that will get registered in AWS Glue
 
 ```python
+import os
+
 from aws_parquet import ParquetDataset
+import pandas as pd
 import pandera as pa
 from pandera.typing import Series
 
-class MyDatasetSchema(pa.SchemaModel):
+# define your pandera schema model
+class MyDatasetSchemaModel(pa.SchemaModel):
     col1: Series[int] = pa.Field(nullable=False, ge=0, lt=10)
     col2: Series[pa.DateTime]
     col3: Series[float]
 
-class MyDataset(ParquetDataset):
-    
-    @property
-    def schema(self) -> ParquetDatasetSchema:
-        return MyDatasetSchema.to_schema()
-    
-    @property
-    def partition_columns(self) -> List[str]:
-        return ["col1", "col2"]
+# configuration
+database = "default"
+bucket_name = os.environ["AWS_S3_BUCKET"]
+table_name = "foo_bar"
+path = f"s3://{bucket_name}/{table_name}/"
+partition_cols = ["col1", "col2"]
+schema = MyDatasetSchemaModel.to_schema()
 
-    @property
-    def path(self) -> str:
-        return "s3://my-bucket/my-dataset"
-    
-    @property
-    def database(self) -> str:
-        return "my_database"
-    
-    @property
-    def table(self) -> str:
-        return "my_table"
+# create the dataset
+dataset = ParquetDataset(
+    database=database,
+    table=table_name,
+    partition_cols=partition_cols,
+    path=path,
+    pandera_schema=schema,
+)
 
-dataset = MyDataset()
 dataset.create()
 ```
-
-instead with awswrangler one would have to do the following:
-
-```python
-import awswrangler as wr
-
-wr.catalog.create_parquet_table(
-    database="my_database",
-    path="s3://my-bucket/my-dataset",
-    table="my_table",
-    partitions_types={"col1": "bigint", "col2": "timestamp"},
-    columns_types={"col3": "double"},
-)
-```
-
-Appending new data to the dataset
+Append new data to the dataset
 
 ```python
 df = pd.DataFrame({
@@ -77,96 +87,38 @@ df = pd.DataFrame({
 dataset.update(df)
 ```
 
-instead with awswrangler one would have to do the following:
-
-```python
-df = pd.DataFrame({
-    "col1": [1, 2, 3],
-    "col2": ["2021-01-01", "2021-01-02", "2021-01-03"],
-    "col3": [1.0, 2.0, 3.0]
-})
-
-# perform schema validation and type casting 
-df_validated = validate_schema(df)
-
-wr.s3.to_parquet(
-    df=df,
-    path="s3://my-bucket/my-dataset",
-    dataset=True,
-    database="my_database",
-    table="my_table",
-    partition_cols=["col1", "col2"],
-    mode="append"
-)
-```
-
-Overwriting data in the dataset
-
-```python
-df = pd.DataFrame({
-    "col1": [4, 5, 6],
-    "col2": ["2021-01-01", "2021-01-02", "2021-01-03"],
-    "col3": [1.0, 2.0, 3.0]
-})
-dataset.update(df, overwrite=True)
-```
-
-instead with awswrangler one would have to do the following:
-
-```python
-df_overwrite = pd.DataFrame({
-    "col1": ["4", "5", "6"],
-    "col2": ["2021-01-04", "2021-01-05", "2021-01-06"],
-    "col3": [7.0, 8.0, 9.0]
-})
-
-df_overwrite_validated = MyDatasetSchema.validate(df_overwrite)
-
-wr.s3.to_parquet(
-    df=df_overwrite_validated,
-    path="s3://my-bucket/my-dataset",
-    dataset=True,
-    database="my_database",
-    table="my_table",
-    partition_cols=["col1", "col2"],
-    mode="overwrite_partitions"
-)
-```
-
-Reading a partition of the dataset
+Read a partition of the dataset
 
 ```python
 df = dataset.read({"col2": "2021-01-01"})
 ```
 
-instead with awswrangler one would have to do the following:
+Overwrite data in the dataset
 
 ```python
-df = wr.s3.read_parquet(
-    path="s3://my-bucket/my-dataset",
-    dataset=True,
-    database="my_database",
-    table="my_table",
-    partition_filter=lambda x: pd.Timestamp(x["col2"]) == pd.Timestamp("2021-01-01")
-)
+df_overwrite = pd.DataFrame({
+    "col1": [1, 2, 3],
+    "col2": ["2021-01-01", "2021-01-02", "2021-01-03"],
+    "col3": [4.0, 5.0, 6.0]
+})
+dataset.update(df_overwrite, overwrite=True)
 ```
 
-Deleting a partition of the dataset
+Query the dataset using AWS Athena
 
 ```python
-dataset.delete_partition({"col1": 4, "col2": "2021-01-04"})
+df = dataset.query("SELECT col1 FROM foo_bar")
 ```
 
-instead with awswrangler one would have to do the following:
+Delete a partition of the dataset
 
 ```python
-wr.s3.delete_objects(path="s3://infima-package-testing/foo/bar/col1=4/col2=2021-01-04")
-wr.catalog.delete_partitions(
-    database="default",
-    table="foo_bar",
-    partitions_values=[["4", "2021-01-04 00:00:00"]],
-)
+dataset.delete({"col1": 1, "col2": "2021-01-01"})
 ```
 
 
+Delete the dataset in its entirety
 
+```python
+dataset.delete()
+```
